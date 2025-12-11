@@ -144,7 +144,7 @@ void Dinucl_markov::iterate(double& scenario_proba , Downstream_scenario_proba_b
 		downstream_proba_map.set_value(VJ_ins_seq,1.0,memory_layer_proba_map_junction_1);
 	}
 	if(!correct_class){
-		throw invalid_argument("Unknown gene class for DincuclMarkov model: " + this->event_class);
+		throw invalid_argument("Unknown gene class for DincuclMarkov model: " + to_string(this->event_class));
 	}
 
 	new_scenario_proba*=proba_contribution;
@@ -208,7 +208,7 @@ queue<int> Dinucl_markov::draw_random_realization(const Marginal_array_p& model_
 
 	}
 	if(! correct_class){
-		throw invalid_argument("Unknown gene class for DincuclMarkov model: " + this->event_class);
+		throw invalid_argument("Unknown gene class for DincuclMarkov model: " + to_string(this->event_class));
 	}
 	return realization_queue;
 }
@@ -562,7 +562,7 @@ void Dinucl_markov::initialize_crude_scenario_proba_bound(double& downstream_pro
 		}
 	}
 	if(!correct_class){
-		throw invalid_argument("Unknown gene class for DincuclMarkov model: " + this->event_class);
+		throw invalid_argument("Unknown gene class for DincuclMarkov model: " + to_string(this->event_class));
 	}
 
 	//TODO use a better proba bound for this dinucleotide markov model

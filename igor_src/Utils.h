@@ -93,7 +93,7 @@ typedef Rec_Event* Next_event_ptr;
  */
 template<class T> struct null_delete{
 	null_delete<T>(){}
-	void operator()(T*&){};
+	void operator()(T*) const {};
 };
 
 /*
@@ -139,6 +139,7 @@ public:
 		for(int i = 0 ; i != rows*cols ; i++){
 			this->array_p[i] = other.array_p[i];
 		}
+		return *this;
 	}
 
 	T& operator()(const int& i ,const int& j ){

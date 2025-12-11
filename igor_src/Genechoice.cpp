@@ -905,7 +905,7 @@ void Gene_choice::iterate( double& scenario_proba , Downstream_scenario_proba_bo
 			break;
 
 		default:
-			throw invalid_argument("Unknown gene_class for GeneChoice: " + this->event_class);
+			throw invalid_argument("Unknown gene_class for GeneChoice: " + to_string(this->event_class));
 			break;
 	}
 

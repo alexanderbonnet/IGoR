@@ -279,8 +279,13 @@ int main(int argc , char* argv[]){
 
 		//Command line argument setting the number of threads
 		if(string(argv[carg_i]) == string("-threads")){
+			#ifdef _OPENMP
 			omp_set_num_threads(std::stoi(argv[++carg_i]));
 			clog<<"Setting number of threads to: "<<argv[carg_i]<<endl;
+			#else
+			clog<<"OpenMP not available, -threads option ignored"<<endl;
+			++carg_i;
+			#endif
 		}
 
 		//Command line to redirect the standard output to a file
