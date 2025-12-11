@@ -241,7 +241,7 @@ void Insertion::iterate(double& scenario_proba , Downstream_scenario_proba_bound
 			}
 
 		default:
-			throw invalid_argument("Unknown gene_class for Insertion: " + this->event_class);
+			throw invalid_argument("Unknown gene_class for Insertion: " + to_string(this->event_class));
 			break;
 	}
 

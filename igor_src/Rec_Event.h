@@ -65,12 +65,13 @@ class Counter;
  *
  */
 struct Event_realization {
-	const std::string name;
-	const int value_int; //union? template? inheritance and reference? just use a virtual class containing two types of events:str and int
-	const std::string value_str;
-	const Int_Str value_str_int;
+	std::string name;
+	int value_int; //union? template? inheritance and reference? just use a virtual class containing two types of events:str and int
+	std::string value_str;
+	Int_Str value_str_int;
 	int index; //Not defined by the user but at the creation of the event, not quite sure about the mutable
 
+	Event_realization(): name() , value_int(0) , value_str() , value_str_int() , index(0) {}
 	Event_realization(std::string real_name , int val_int , std::string val_str , Int_Str val_str_int , int index_val): name(real_name) , value_int(val_int) , value_str(val_str) , value_str_int(val_str_int) , index(index_val){}
 
 };

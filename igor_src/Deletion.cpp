@@ -906,7 +906,7 @@ void Deletion::iterate(double& scenario_proba , Downstream_scenario_proba_bound_
 				break;
 
 			default:
-				throw invalid_argument("Unknown side for D deletion: " + (*this).event_side); //TODO explicitly throw the side used
+				throw invalid_argument("Unknown side for D deletion: " + to_string((*this).event_side)); //TODO explicitly throw the side used
 				break;
 
 			}
@@ -1170,7 +1170,7 @@ void Deletion::iterate(double& scenario_proba , Downstream_scenario_proba_bound_
 			break;
 
 		default:
-			throw invalid_argument("Unknown gene for deletions : " + this->event_class);
+			throw invalid_argument("Unknown gene for deletions : " + to_string(this->event_class));
 			break;
 	}
 
