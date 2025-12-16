@@ -11,6 +11,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -19,6 +21,10 @@
 #include "Aligner.h"
 #include "CDR3SeqData.h"
 #include "ExtractFeatures.h"
+#include "GenModel.h"
+#include "Model_Parms.h"
+#include "Model_marginals.h"
+#include "Pgencounter.h"
 #include "Utils.h"
 
 using namespace std;
@@ -33,7 +39,7 @@ const std::array<char, 4> NUCLEOTIDES = {'A', 'G', 'T', 'C'};
  * empty)
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on error
  */
-int run_alignment(const string& working_directory, const string& sequence) {
+int run_alignment_old(const string& working_directory, const string& sequence) {
     // Configuration matching command line arguments
     const string batchname = "bar_";
     const string species_str = "human";
@@ -346,6 +352,295 @@ std::string mutate(const std::string& sequence, int left, int right,
     return result;
 }
 
+/**
+ * Computes the generation probability (Pgen) for a sequence.
+ * Replicates the behavior of:
+ *   igor -batch bar -species human -chain beta -evaluate -output --Pgen
+ *
+ * @param working_directory The working directory path for intermediate files
+ * @param sequence The nucleotide sequence to evaluate
+ * @return The estimated generation probability (Pgen), or NaN if evaluation
+ * fails
+ */
+double compute_pgen(const string& working_directory, const string& sequence,
+                    bool verbose) {
+    // Configuration matching command line arguments
+    const string batchname = "bar_";
+    const string species_str = "human";
+    const string chain_path_str = "tcr_beta";
+
+    // Set working directory
+    string cl_path = working_directory.empty() ? "/tmp/" : working_directory;
+    if (cl_path.back() != '/') {
+        cl_path += "/";
+    }
+
+    // Alignment parameters (defaults from main.cpp)
+    const string v_align_filename = "V_alignments.csv";
+    const string d_align_filename = "D_alignments.csv";
+    const string j_align_filename = "J_alignments.csv";
+
+    const double v_align_thresh_value = 50.0;
+    const double d_align_thresh_value = 15.0;
+    const double j_align_thresh_value = 15.0;
+    const double v_gap_penalty = 50.0;
+    const double d_gap_penalty = 50.0;
+    const double j_gap_penalty = 50.0;
+    const bool v_best_align_only = true;
+    const bool d_best_align_only = false;
+    const bool j_best_align_only = true;
+    const bool v_best_gene_only = false;
+    const bool d_best_gene_only = false;
+    const bool j_best_gene_only = false;
+    const int v_left_offset_bound = INT16_MIN;
+    const int v_right_offset_bound = INT16_MAX;
+    const int d_left_offset_bound = INT16_MIN;
+    const int d_right_offset_bound = INT16_MAX;
+    const int j_left_offset_bound = INT16_MIN;
+    const int j_right_offset_bound = INT16_MAX;
+    const bool v_reversed_offsets = false;
+    const bool d_reversed_offsets = false;
+    const bool j_reversed_offsets = false;
+
+    // Evaluate parameters (defaults from main.cpp)
+    const double likelihood_thresh_evaluate = 1e-60;
+    const double proba_threshold_ratio_evaluate = 1e-5;
+    const bool viterbi_evaluate = false;
+
+    // Substitution matrix (heavy_pen_nuc44 from main.cpp)
+    double heavy_pen_nuc44_vect[] = {
+        5,   -14, -14, -14, -14, 2,   -14, 2,   2,   -14, -14, 1,   1,   1,
+        0,   -14, 5,   -14, -14, -14, 2,   2,   -14, -14, 2,   1,   -14, 1,
+        1,   0,   -14, -14, 5,   -14, 2,   -14, 2,   -14, 2,   -14, 1,   1,
+        -14, 1,   0,   -14, -14, -14, 5,   2,   -14, -14, 2,   -14, 2,   1,
+        1,   1,   -14, 0,   -14, -14, 2,   2,   1.5, -14, -12, -12, -12, -12,
+        1,   1,   -13, -13, 0,   2,   2,   -14, -14, -14, 1.5, -12, -12, -12,
+        -12, -13, -13, 1,   1,   0,   -14, 2,   2,   -14, -12, -12, 1.5, -14,
+        -12, -12, 1,   -13, -13, 1,   0,   2,   -14, -14, 2,   -12, -12, -14,
+        1.5, -12, -12, -13, 1,   1,   -13, 0,   2,   -14, 2,   -14, -12, -12,
+        -12, -12, 1.5, -14, -13, 1,   -13, 1,   0,   -14, 2,   -14, 2,   -12,
+        -12, -12, -12, -14, 1.5, 1,   -13, 1,   -13, 0,   -14, 1,   1,   1,
+        1,   -13, 1,   -13, -13, 1,   0.5, -12, -12, -12, 0,   1,   -14, 1,
+        1,   1,   -13, -13, 1,   1,   -13, -12, 0.5, -12, -12, 0,   1,   1,
+        -14, 1,   -13, 1,   -13, 1,   -13, 1,   -12, -12, 0.5, -12, 0,   1,
+        1,   1,   -14, -13, 1,   1,   -13, 1,   -13, -12, -12, -12, 0.5, 0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0};
+    Matrix<double> subst_matrix(15, 15, heavy_pen_nuc44_vect);
+
+    // Genomic templates
+    vector<pair<string, string>> v_genomic;
+    vector<pair<string, string>> d_genomic;
+    vector<pair<string, string>> j_genomic;
+
+    // Read genomic templates for human TCR beta
+    try {
+        v_genomic = read_genomic_fasta(string(IGOR_DATA_DIR) + "/models/" +
+                                       species_str + "/" + chain_path_str +
+                                       "/ref_genome/genomicVs.fasta");
+    } catch (exception& e) {
+        cerr << "[IGoR] ERROR: Exception caught while reading TRB V genomic "
+                "templates: "
+             << e.what() << endl;
+        return std::nan("");
+    }
+
+    try {
+        d_genomic = read_genomic_fasta(string(IGOR_DATA_DIR) + "/models/" +
+                                       species_str + "/" + chain_path_str +
+                                       "/ref_genome/genomicDs.fasta");
+    } catch (exception& e) {
+        cerr << "[IGoR] ERROR: Exception caught while reading TRB D genomic "
+                "templates: "
+             << e.what() << endl;
+        return std::nan("");
+    }
+
+    try {
+        j_genomic = read_genomic_fasta(string(IGOR_DATA_DIR) + "/models/" +
+                                       species_str + "/" + chain_path_str +
+                                       "/ref_genome/genomicJs.fasta");
+    } catch (exception& e) {
+        cerr << "[IGoR] ERROR: Exception caught while reading TRB J genomic "
+                "templates: "
+             << e.what() << endl;
+        return std::nan("");
+    }
+
+    // Create indexed sequence list with single sequence
+    int index = 0;
+    vector<pair<const int, const string>> indexed_seqlist = {{index, sequence}};
+
+    // Create alignment directory
+    system(&("mkdir -p " + cl_path + "aligns/")[0]);
+
+    // Perform V alignments
+    Aligner v_aligner(subst_matrix, v_gap_penalty, V_gene);
+    v_aligner.set_genomic_sequences(v_genomic);
+    try {
+        v_aligner.align_seqs(
+            cl_path + "aligns/" + batchname + v_align_filename, indexed_seqlist,
+            v_align_thresh_value, v_best_align_only, v_best_gene_only,
+            v_left_offset_bound, v_right_offset_bound, v_reversed_offsets);
+    } catch (exception& e) {
+        cerr << "[IGoR] ERROR: Exception caught upon aligning V genomic "
+                "templates: "
+             << e.what() << endl;
+        return std::nan("");
+    }
+
+    // Perform D alignments
+    Aligner d_aligner(subst_matrix, d_gap_penalty, D_gene);
+    d_aligner.set_genomic_sequences(d_genomic);
+    try {
+        d_aligner.align_seqs(
+            cl_path + "aligns/" + batchname + d_align_filename, indexed_seqlist,
+            d_align_thresh_value, d_best_align_only, d_best_gene_only,
+            d_left_offset_bound, d_right_offset_bound, d_reversed_offsets);
+    } catch (exception& e) {
+        cerr << "[IGoR] ERROR: Exception caught upon aligning D genomic "
+                "templates: "
+             << e.what() << endl;
+        return std::nan("");
+    }
+
+    // Perform J alignments
+    Aligner j_aligner(subst_matrix, j_gap_penalty, J_gene);
+    j_aligner.set_genomic_sequences(j_genomic);
+    try {
+        j_aligner.align_seqs(
+            cl_path + "aligns/" + batchname + j_align_filename, indexed_seqlist,
+            j_align_thresh_value, j_best_align_only, j_best_gene_only,
+            j_left_offset_bound, j_right_offset_bound, j_reversed_offsets);
+    } catch (exception& e) {
+        cerr << "[IGoR] ERROR: Exception caught upon aligning J genomic "
+                "templates: "
+             << e.what() << endl;
+        return std::nan("");
+    }
+
+    // Load model parameters and marginals for human TCR beta
+    Model_Parms cl_model_parms;
+    try {
+        cl_model_parms.read_model_parms(string(IGOR_DATA_DIR) + "/models/" +
+                                        species_str + "/" + chain_path_str +
+                                        "/models/model_parms.txt");
+    } catch (exception& e) {
+        cerr << "[IGoR] ERROR: Exception caught while reading model "
+                "parameters: "
+             << e.what() << endl;
+        return std::nan("");
+    }
+
+    Model_marginals cl_model_marginals(cl_model_parms);
+    try {
+        cl_model_marginals.txt2marginals(
+            string(IGOR_DATA_DIR) + "/models/" + species_str + "/" +
+                chain_path_str + "/models/model_marginals.txt",
+            cl_model_parms);
+    } catch (exception& e) {
+        cerr << "[IGoR] ERROR: Exception caught while reading model "
+                "marginals: "
+             << e.what() << endl;
+        return std::nan("");
+    }
+
+    // Create Pgen counter (output_Pgen_estimator_only = true for evaluate mode)
+    string evaluate_path = cl_path + batchname + "evaluate/";
+    system(&("mkdir -p " + evaluate_path + "output")[0]);
+
+    map<size_t, shared_ptr<Counter>> cl_counters_list;
+    shared_ptr<Counter> pgen_counter_ptr(
+        new Pgen_counter(evaluate_path + "output/", true));
+    cl_counters_list.emplace(cl_counters_list.size(), pgen_counter_ptr);
+
+    // Create GenModel with model and counters
+    GenModel genmodel(cl_model_parms, cl_model_marginals, cl_counters_list);
+
+    // Read alignments back
+    unordered_map<
+        int, pair<string, unordered_map<Gene_class, vector<Alignment_data>>>>
+        sorted_alignments;
+    try {
+        sorted_alignments = read_alignments_seq_csv_score_range(
+            cl_path + "aligns/" + batchname + v_align_filename, V_gene, 55,
+            false, indexed_seqlist);
+    } catch (exception& e) {
+        cerr << "[IGoR] ERROR: Exception caught while reading V alignments: "
+             << e.what() << endl;
+        return std::nan("");
+    }
+
+    try {
+        sorted_alignments = read_alignments_seq_csv_score_range(
+            cl_path + "aligns/" + batchname + d_align_filename, D_gene, 35,
+            false, indexed_seqlist, sorted_alignments);
+    } catch (exception& e) {
+        cerr << "[IGoR] ERROR: Exception caught while reading D alignments: "
+             << e.what() << endl;
+        return std::nan("");
+    }
+
+    try {
+        sorted_alignments = read_alignments_seq_csv_score_range(
+            cl_path + "aligns/" + batchname + j_align_filename, J_gene, 10,
+            false, indexed_seqlist, sorted_alignments);
+    } catch (exception& e) {
+        cerr << "[IGoR] ERROR: Exception caught while reading J alignments: "
+             << e.what() << endl;
+        return std::nan("");
+    }
+
+    // Convert to vector format required by infer_model
+    vector<
+        tuple<int, string, unordered_map<Gene_class, vector<Alignment_data>>>>
+        sorted_alignments_vec = map2vect(sorted_alignments);
+
+    // Check if we have any alignments to evaluate
+    if (sorted_alignments_vec.empty()) {
+        cerr << "[IGoR] WARNING: No valid alignments found for sequence"
+             << endl;
+        return std::nan("");
+    }
+
+    // Run evaluation (1 iteration, fast_iter=false for evaluate mode)
+    genmodel.infer_model(sorted_alignments_vec, 1, evaluate_path, false,
+                         likelihood_thresh_evaluate, viterbi_evaluate,
+                         proba_threshold_ratio_evaluate);
+
+    // Read the Pgen result from the output file
+    string pgen_output_file = evaluate_path + "output/Pgen_counts.csv";
+    ifstream pgen_file(pgen_output_file);
+    if (!pgen_file.is_open()) {
+        cerr << "[IGoR] ERROR: Could not open Pgen output file: "
+             << pgen_output_file << endl;
+        return std::nan("");
+    }
+
+    string line;
+    double pgen_estimate = std::nan("");
+
+    // Skip header
+    if (getline(pgen_file, line)) {
+        // Read first data line (seq_index;Pgen_estimate)
+        if (getline(pgen_file, line)) {
+            size_t semicolon_pos = line.find(';');
+            if (semicolon_pos != string::npos) {
+                string pgen_str = line.substr(semicolon_pos + 1);
+                try {
+                    pgen_estimate = stod(pgen_str);
+                } catch (exception& e) {
+                    cerr << "[IGoR] ERROR: Could not parse Pgen value: "
+                         << pgen_str << endl;
+                }
+            }
+        }
+    }
+
+    pgen_file.close();
+    return pgen_estimate;
+}
+
 int main(int argc, char* argv[]) {
     string working_dir =
         "/Users/alexanderbonnet/code/statbiophys-technical-test/data/1";
@@ -360,7 +655,13 @@ int main(int argc, char* argv[]) {
         "AACTATAGCTCTGAGCTGAATGTGAACGCCTTGTTGCTGGGGGACTCGGCCCTCTATCTCTGTGCCAGCA"
         "GCTTGGGCTCAGGGTATGTTTCAGGGAAACACCATATATTTTGGAGAGGGAAGTTGGCTCACTGTTGTA"
         "G";
-    run_alignment(working_dir, sequence);
+
+    // run_alignment_old(working_dir, sequence);
+    // cout << "oasihfoalfhal";
+
+    double pgen = compute_pgen(working_dir, sequence, true);
+    cout << pgen;
+    // run_alignment(working_dir, sequence);
 
     return EXIT_SUCCESS;
 }
