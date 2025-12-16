@@ -223,19 +223,7 @@ Resources load_resources(bool verbose) {
     return result;
 };
 
-/**
- * Computes the generation probability (Pgen) for a sequence.
- * Replicates the behavior of:
- *   igor -batch bar -species human -chain beta -evaluate -output --Pgen
- *
- * @param working_directory The working directory path for intermediate files
- * @param sequence The nucleotide sequence to evaluate
- * @return The estimated generation probability (Pgen), or NaN if evaluation
- * fails
- */
-
-// ... (rest of the includes)
-
+// Computes the generation probability (Pgen) for a sequence.
 double compute_pgen(const string& workdir, const string& sequence,
                     Resources resources, bool verbose) {
     unique_ptr<SilentMode> silent_mode;
@@ -401,6 +389,7 @@ double compute_pgen(const string& workdir, const string& sequence,
     return pgen_estimate;
 }
 
+// Computes the hamming distance between two sequences of identical length
 int hamming_distance(const std::string& s1, const std::string& s2) {
     if (s1.length() != s2.length()) {
         throw std::invalid_argument("Strings must have identical length.");
@@ -415,6 +404,7 @@ int hamming_distance(const std::string& s1, const std::string& s2) {
     return distance;
 }
 
+// Randomly chooses a new nucleotide that is not the current one
 char choose_different_nucleotide(char current, std::mt19937& rng) {
     std::array<char, 3> choices;
     int idx = 0;
@@ -427,6 +417,8 @@ char choose_different_nucleotide(char current, std::mt19937& rng) {
     return choices[dist(rng)];
 }
 
+// Randomly mutates a sequence by first randomly choosing a position,
+// then randomly mutating the nucleotide in that position.
 std::string mutate(const std::string& sequence, int left, int right,
                    std::mt19937& rng) {
     if (right >= 0) {
@@ -451,11 +443,14 @@ std::string mutate(const std::string& sequence, int left, int right,
     return result;
 }
 
+// Convert a double to a string using the scientific notation
 string double_to_string(double value, int precision = 5) {
     stringstream ss;
     ss << std::scientific << std::setprecision(precision) << value;
     return ss.str();
 }
+
+// Container for data to write to disk
 struct StepMetadata {
     string state;
     int distance;
@@ -468,6 +463,7 @@ struct StepMetadata {
     }
 };
 
+// Run the metroplis algorithm
 void metropolis(const string& workdir, const string& sequence, int num_samples,
                 int seed, std::pair<int, int> mutation_region, int buffer_size,
                 bool overwrite) {
@@ -530,13 +526,16 @@ void metropolis(const string& workdir, const string& sequence, int num_samples,
         }
 
         if (metadata_buffer.size() >= buffer_size) {
+            std::string full_metadata_string;
             for (const auto& meta : metadata_buffer) {
-                outfile << meta.to_string() << "\n";
+                full_metadata_string += meta.to_string() + "\n";
             }
+            outfile << full_metadata_string;
             metadata_buffer.clear();
+            outfile.flush();
         }
 
-        if (step % 100 == 0 || step == num_samples) {
+        if (step % buffer_size == 0 || step == num_samples) {
             double acceptance_ratio =
                 (step > 0) ? static_cast<double>(num_accepted) / step : 0.0;
             cout << "[IGoR] Step " << step << "/" << num_samples
@@ -555,17 +554,14 @@ void metropolis(const string& workdir, const string& sequence, int num_samples,
 
 int main(int argc, char* argv[]) {
     string workdir =
-        "/Users/alexanderbonnet/code/statbiophys-technical-test/data";
-    if (argc > 1) {
-        workdir = argv[1];
-    }
+        "/Users/alexanderbonnet/code/statbiophys-technical-test/data/part2";
 
     string sequence =
         "GACGCTGGAGTCACCCAAAGTCCCACACACCTGATCAAAACGAGAGGACAGCAAGTGACTCTGAGATGCT"
         "CTCCTAAGTCTGGGCATGACACTGTGTCCTGGTACCAACAGGCCCTGGGTCAGGGGCCCCAGTTTATCTT"
         "TCAGTATTATGAGGAGGAAGAGAGACAGAGAGGCAACTTCCCTGATCGATTCTCAGGTCACCAGTTCCCT"
-        "AACTATAGCTCTGAGCTGAATGTGAACGCCTTGTTGCTGGGGGACTCGGCCCTCTATCTCTGAAATCGCA"
-        "GCTTGGAAGGCGGGAAGGAGTGGGGGAAACACCGTGTACTATGGAGAGGGAAGTTGGCTCACTGTTGTA"
+        "AACTATAGCTCTGAGCTGAATGTGAACGCCTTGTTGCTGGGGGACTCGGCCCTCTATCTCTGTGCCAGCA"
+        "GCTTGGGCTCAGGGTATGTTTCAGGGAAACACCATATATTTTGGAGAGGGAAGTTGGCTCACTGTTGTA"
         "G";
 
     // Resources resources = load_resources();
@@ -573,10 +569,10 @@ int main(int argc, char* argv[]) {
 
     // cout << result;
 
-    int num_samples = 200;
-    int seed = 42;
+    int num_samples = 10000;
+    int seed = 1235;
     std::pair<int, int> mutation_region = {270, -30};
-    int buffer_size = 5;
+    int buffer_size = 10;
     bool overwrite = true;
 
     metropolis(workdir, sequence, num_samples, seed, mutation_region,
