@@ -553,9 +553,12 @@ void metropolis(const string& workdir, const string& sequence, int num_samples,
 }
 
 int main(int argc, char* argv[]) {
-    string workdir =
-        "/Users/alexanderbonnet/code/statbiophys-technical-test/data/part2";
+    if (argc < 2) {
+        cerr << "Usage: " << argv[0] << " <workdir> <sequence>" << endl;
+        return EXIT_FAILURE;
+    }
 
+    string workdir = argv[1];
     string sequence =
         "GACGCTGGAGTCACCCAAAGTCCCACACACCTGATCAAAACGAGAGGACAGCAAGTGACTCTGAGATGCT"
         "CTCCTAAGTCTGGGCATGACACTGTGTCCTGGTACCAACAGGCCCTGGGTCAGGGGCCCCAGTTTATCTT"
