@@ -1,21 +1,14 @@
-/*
- * metropolis.cpp
- *
- * This file reproduces the behavior of calling IGoR with:
- *   -batch bar -species human -chain beta -align --all
- *
- * It performs V, D, and J alignments for human TCR beta chain sequences.
- */
-
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
+#include <cmath>
 #include <cstdlib>
-#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <memory>
+#include <random>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -37,8 +30,6 @@ const std::array<char, 4> NUCLEOTIDES = {'A', 'G', 'T', 'C'};
 // =============================================================================
 // Pgen computation constants and pre-loaded data
 // =============================================================================
-
-namespace {
 
 // Configuration constants
 const string PGEN_BATCHNAME = "bar_";
@@ -97,149 +88,78 @@ double SUBST_MATRIX_VALUES[] = {
     1,   1,   1,   -14, -13, 1,   1,   -13, 1,   -13, -12, -12, -12, 0.5, 0,
     0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0};
 
-/**
- * Singleton class to hold pre-loaded Pgen computation resources.
- * Loads genomic templates and model parameters only once.
- */
-class PgenResources {
-   public:
-    static PgenResources& instance() {
-        static PgenResources inst;
-        return inst;
-    }
-
-    bool is_initialized() const { return initialized_; }
-    const string& error_message() const { return error_message_; }
-
-    const Matrix<double>& subst_matrix() const { return subst_matrix_; }
-    const vector<pair<string, string>>& v_genomic() const { return v_genomic_; }
-    const vector<pair<string, string>>& d_genomic() const { return d_genomic_; }
-    const vector<pair<string, string>>& j_genomic() const { return j_genomic_; }
-    const Model_Parms& model_parms() const { return model_parms_; }
-    const Model_marginals& model_marginals() const { return model_marginals_; }
-
-   private:
-    PgenResources() : subst_matrix_(15, 15, SUBST_MATRIX_VALUES) {
-        initialized_ = load_resources();
-    }
-
-    bool load_resources() {
-        string base_path = string(IGOR_DATA_DIR) + "/models/" + PGEN_SPECIES +
-                           "/" + PGEN_CHAIN;
-
-        // Load genomic templates
-        try {
-            v_genomic_ =
-                read_genomic_fasta(base_path + "/ref_genome/genomicVs.fasta");
-        } catch (exception& e) {
-            error_message_ =
-                string("Failed to read V genomic templates: ") + e.what();
-            return false;
-        }
-
-        try {
-            d_genomic_ =
-                read_genomic_fasta(base_path + "/ref_genome/genomicDs.fasta");
-        } catch (exception& e) {
-            error_message_ =
-                string("Failed to read D genomic templates: ") + e.what();
-            return false;
-        }
-
-        try {
-            j_genomic_ =
-                read_genomic_fasta(base_path + "/ref_genome/genomicJs.fasta");
-        } catch (exception& e) {
-            error_message_ =
-                string("Failed to read J genomic templates: ") + e.what();
-            return false;
-        }
-
-        // Load model parameters
-        try {
-            model_parms_.read_model_parms(base_path +
-                                          "/models/model_parms.txt");
-        } catch (exception& e) {
-            error_message_ =
-                string("Failed to read model parameters: ") + e.what();
-            return false;
-        }
-
-        // Load model marginals
-        model_marginals_ = Model_marginals(model_parms_);
-        try {
-            model_marginals_.txt2marginals(
-                base_path + "/models/model_marginals.txt", model_parms_);
-        } catch (exception& e) {
-            error_message_ =
-                string("Failed to read model marginals: ") + e.what();
-            return false;
-        }
-
-        return true;
-    }
-
-    bool initialized_ = false;
-    string error_message_;
-    Matrix<double> subst_matrix_;
-    vector<pair<string, string>> v_genomic_;
-    vector<pair<string, string>> d_genomic_;
-    vector<pair<string, string>> j_genomic_;
-    Model_Parms model_parms_;
-    Model_marginals model_marginals_;
+struct Resources {
+    vector<pair<string, string>> v_genomic;
+    vector<pair<string, string>> d_genomic;
+    vector<pair<string, string>> j_genomic;
+    Model_Parms model_params;
+    Model_marginals model_marginals;
+    Matrix<double> subst_matrix;
 };
 
-}  // anonymous namespace
+// load resources only once instead of every time we need to coompute pgen
+Resources load_resources() {
+    vector<pair<string, string>> v_genomic;
+    vector<pair<string, string>> d_genomic;
+    vector<pair<string, string>> j_genomic;
 
-int hamming_distance(const std::string& s1, const std::string& s2) {
-    if (s1.length() != s2.length()) {
-        throw std::invalid_argument("Strings must have identical length.");
+    string base_path =
+        string(IGOR_DATA_DIR) + "/models/" + PGEN_SPECIES + "/" + PGEN_CHAIN;
+
+    // Read genomic templates for human TCR beta
+    try {
+        v_genomic =
+            read_genomic_fasta(base_path + "/ref_genome/genomicVs.fasta");
+    } catch (exception& e) {
+        cerr << "[IGoR] ERROR: Exception caught while reading TRB V genomic "
+                "templates: "
+             << e.what() << endl;
     }
 
-    int distance = 0;
-    for (size_t i = 0; i < s1.length(); ++i) {
-        if (s1[i] != s2[i]) {
-            ++distance;
-        }
-    }
-    return distance;
-}
-
-char choose_different_nucleotide(char current, std::mt19937& rng) {
-    std::array<char, 3> choices;
-    int idx = 0;
-    for (char nucleotide : NUCLEOTIDES) {
-        if (nucleotide != current) {
-            choices[idx++] = nucleotide;
-        }
-    }
-    std::uniform_int_distribution<int> dist(0, 2);
-    return choices[dist(rng)];
-}
-
-std::string mutate(const std::string& sequence, int left, int right,
-                   std::mt19937& rng) {
-    if (right >= 0) {
-        throw std::invalid_argument("'right' should be a negative integer.");
+    try {
+        d_genomic =
+            read_genomic_fasta(base_path + "/ref_genome/genomicDs.fasta");
+    } catch (exception& e) {
+        cerr << "[IGoR] ERROR: Exception caught while reading TRB D genomic "
+                "templates: "
+             << e.what() << endl;
     }
 
-    int adjusted_right = static_cast<int>(sequence.length()) + right;
-
-    if (left >= adjusted_right) {
-        throw std::invalid_argument(
-            "'left' needs to be strictly inferior to 'right'.");
+    try {
+        j_genomic =
+            read_genomic_fasta(base_path + "/ref_genome/genomicJs.fasta");
+    } catch (exception& e) {
+        cerr << "[IGoR] ERROR: Exception caught while reading TRB J genomic "
+                "templates: "
+             << e.what() << endl;
     }
 
-    std::uniform_int_distribution<int> pos_dist(left, adjusted_right);
-    int position = pos_dist(rng);
+    Model_Parms model_params;
+    try {
+        model_params.read_model_parms(base_path + "/models/model_parms.txt");
+    } catch (exception& e) {
+        cerr << "[IGoR] ERROR: Exception caught while reading model "
+                "parameters: "
+             << e.what() << endl;
+    }
 
-    char current_nucleotide = sequence[position];
-    char mutation = choose_different_nucleotide(current_nucleotide, rng);
+    Model_marginals model_marginals(model_params);
+    try {
+        model_marginals.txt2marginals(base_path + "/models/model_marginals.txt",
+                                      model_params);
+    } catch (exception& e) {
+        cerr << "[IGoR] ERROR: Exception caught while reading model "
+                "marginals: "
+             << e.what() << endl;
+    }
 
-    std::string result = sequence;
-    result[position] = mutation;
+    Matrix<double> subst_matrix(15, 15, SUBST_MATRIX_VALUES);
+
+    Resources result = {v_genomic,    d_genomic,       j_genomic,
+                        model_params, model_marginals, subst_matrix};
+
     return result;
-}
+};
 
 /**
  * Computes the generation probability (Pgen) for a sequence.
@@ -251,87 +171,13 @@ std::string mutate(const std::string& sequence, int left, int right,
  * @return The estimated generation probability (Pgen), or NaN if evaluation
  * fails
  */
-double compute_pgen(const string& working_directory, const string& sequence,
-                    bool verbose) {
-    // Suppress all output from IGoR library functions if not verbose
-    // We need to redirect both C++ streams AND C-level file descriptors
-    int stdout_fd = -1;
-    int stderr_fd = -1;
-    int dev_null_fd = -1;
-    streambuf* cout_buf = nullptr;
-    streambuf* clog_buf = nullptr;
 
-    if (!verbose) {
-        // Flush C++ streams first
-        cout.flush();
-        clog.flush();
-        cerr.flush();
-        fflush(stdout);
-        fflush(stderr);
+// ... (rest of the includes)
 
-        // Save original file descriptors
-        stdout_fd = dup(STDOUT_FILENO);
-        stderr_fd = dup(STDERR_FILENO);
-
-        // Open /dev/null and redirect stdout/stderr to it
-        dev_null_fd = open("/dev/null", O_WRONLY);
-        if (dev_null_fd != -1) {
-            dup2(dev_null_fd, STDOUT_FILENO);
-            dup2(dev_null_fd, STDERR_FILENO);
-        }
-
-        // Also redirect C++ streams
-        static ofstream null_stream("/dev/null");
-        cout_buf = cout.rdbuf(null_stream.rdbuf());
-        clog_buf = clog.rdbuf(null_stream.rdbuf());
-    }
-
-    // RAII helper to restore streams on exit (including exceptions)
-    struct StreamRestorer {
-        int stdout_fd;
-        int stderr_fd;
-        int dev_null_fd;
-        streambuf* cout_buf;
-        streambuf* clog_buf;
-        bool active;
-        ~StreamRestorer() {
-            if (active) {
-                // Flush before restoring
-                cout.flush();
-                clog.flush();
-                fflush(stdout);
-                fflush(stderr);
-
-                // Restore C-level file descriptors
-                if (stdout_fd != -1) {
-                    dup2(stdout_fd, STDOUT_FILENO);
-                    close(stdout_fd);
-                }
-                if (stderr_fd != -1) {
-                    dup2(stderr_fd, STDERR_FILENO);
-                    close(stderr_fd);
-                }
-                if (dev_null_fd != -1) {
-                    close(dev_null_fd);
-                }
-
-                // Restore C++ streams
-                if (cout_buf) cout.rdbuf(cout_buf);
-                if (clog_buf) clog.rdbuf(clog_buf);
-            }
-        }
-    } restorer{stdout_fd, stderr_fd, dev_null_fd, cout_buf, clog_buf, !verbose};
-
-    // Get pre-loaded resources (loaded only once on first call)
-    PgenResources& res = PgenResources::instance();
-    if (!res.is_initialized()) {
-        cerr << "[IGoR] ERROR: Failed to initialize Pgen resources: "
-             << res.error_message() << endl;
-        return std::nan("");
-    }
-
+double compute_pgen(const string& workdir, const string& sequence,
+                    Resources resources, bool verbose) {
     // Set working directory
-    string cl_path = working_directory.empty() ? "/tmp/" : working_directory;
+    string cl_path = workdir.empty() ? "/tmp/" : workdir;
     if (cl_path.back() != '/') {
         cl_path += "/";
     }
@@ -344,8 +190,8 @@ double compute_pgen(const string& working_directory, const string& sequence,
     system(&("mkdir -p " + cl_path + "aligns/")[0]);
 
     // Perform V alignments
-    Aligner v_aligner(res.subst_matrix(), V_GAP_PENALTY, V_gene);
-    v_aligner.set_genomic_sequences(res.v_genomic());
+    Aligner v_aligner(resources.subst_matrix, V_GAP_PENALTY, V_gene);
+    v_aligner.set_genomic_sequences(resources.v_genomic);
     try {
         v_aligner.align_seqs(
             cl_path + "aligns/" + PGEN_BATCHNAME + V_ALIGN_FILENAME,
@@ -360,8 +206,8 @@ double compute_pgen(const string& working_directory, const string& sequence,
     }
 
     // Perform D alignments
-    Aligner d_aligner(res.subst_matrix(), D_GAP_PENALTY, D_gene);
-    d_aligner.set_genomic_sequences(res.d_genomic());
+    Aligner d_aligner(resources.subst_matrix, D_GAP_PENALTY, D_gene);
+    d_aligner.set_genomic_sequences(resources.d_genomic);
     try {
         d_aligner.align_seqs(
             cl_path + "aligns/" + PGEN_BATCHNAME + D_ALIGN_FILENAME,
@@ -376,8 +222,8 @@ double compute_pgen(const string& working_directory, const string& sequence,
     }
 
     // Perform J alignments
-    Aligner j_aligner(res.subst_matrix(), J_GAP_PENALTY, J_gene);
-    j_aligner.set_genomic_sequences(res.j_genomic());
+    Aligner j_aligner(resources.subst_matrix, J_GAP_PENALTY, J_gene);
+    j_aligner.set_genomic_sequences(resources.j_genomic);
     try {
         j_aligner.align_seqs(
             cl_path + "aligns/" + PGEN_BATCHNAME + J_ALIGN_FILENAME,
@@ -401,7 +247,7 @@ double compute_pgen(const string& working_directory, const string& sequence,
     cl_counters_list.emplace(cl_counters_list.size(), pgen_counter_ptr);
 
     // Create GenModel with pre-loaded model and counters
-    GenModel genmodel(res.model_parms(), res.model_marginals(),
+    GenModel genmodel(resources.model_params, resources.model_marginals,
                       cl_counters_list);
 
     // Read alignments back
@@ -488,27 +334,186 @@ double compute_pgen(const string& working_directory, const string& sequence,
     return pgen_estimate;
 }
 
+int hamming_distance(const std::string& s1, const std::string& s2) {
+    if (s1.length() != s2.length()) {
+        throw std::invalid_argument("Strings must have identical length.");
+    }
+
+    int distance = 0;
+    for (size_t i = 0; i < s1.length(); ++i) {
+        if (s1[i] != s2[i]) {
+            ++distance;
+        }
+    }
+    return distance;
+}
+
+char choose_different_nucleotide(char current, std::mt19937& rng) {
+    std::array<char, 3> choices;
+    int idx = 0;
+    for (char nucleotide : NUCLEOTIDES) {
+        if (nucleotide != current) {
+            choices[idx++] = nucleotide;
+        }
+    }
+    std::uniform_int_distribution<int> dist(0, 2);
+    return choices[dist(rng)];
+}
+
+std::string mutate(const std::string& sequence, int left, int right,
+                   std::mt19937& rng) {
+    if (right >= 0) {
+        throw std::invalid_argument("'right' should be a negative integer.");
+    }
+
+    int adjusted_right = static_cast<int>(sequence.length()) + right;
+
+    if (left >= adjusted_right) {
+        throw std::invalid_argument(
+            "'left' needs to be strictly inferior to 'right'.");
+    }
+
+    std::uniform_int_distribution<int> pos_dist(left, adjusted_right);
+    int position = pos_dist(rng);
+
+    char current_nucleotide = sequence[position];
+    char mutation = choose_different_nucleotide(current_nucleotide, rng);
+
+    std::string result = sequence;
+    result[position] = mutation;
+    return result;
+}
+
+string double_to_string(double value, int precision = 5) {
+    stringstream ss;
+    ss << std::scientific << std::setprecision(precision) << value;
+    return ss.str();
+}
+struct StepMetadata {
+    string state;
+    int distance;
+    double pgen;
+    int step;
+
+    string to_string() const {
+        return state + "," + std::to_string(distance) + "," +
+               double_to_string(pgen) + "," + std::to_string(step);
+    }
+};
+
+void metropolis(const string& workdir, const string& sequence, int num_samples,
+                int seed, std::pair<int, int> mutation_region, int buffer_size,
+                bool overwrite) {
+    // Setup random number generation
+    std::mt19937 rng(seed);
+
+    // Setup working directory
+    struct stat info;
+    bool dir_exists =
+        (stat(workdir.c_str(), &info) == 0 && (info.st_mode & S_IFDIR));
+
+    if (dir_exists && overwrite) {
+        string command = "rm -rf " + workdir;
+        system(command.c_str());
+    }
+    string mkdir_command = "mkdir -p " + workdir;
+    system(mkdir_command.c_str());
+
+    Resources resources = load_resources();
+
+    // Initial step
+    double current_prob = compute_pgen(workdir, sequence, resources, false);
+    if (std::isnan(current_prob)) {
+        cerr << "[IGoR] ERROR: Initial Pgen is NaN, aborting." << endl;
+        return;
+    }
+
+    vector<StepMetadata> metadata_buffer;
+    metadata_buffer.push_back({sequence, 0, current_prob, 0});
+
+    ofstream outfile(workdir + "/samples.csv");
+    outfile << "state,distance,pgen,step\n";
+
+    string current_state = sequence;
+    int num_accepted = 0;
+
+    cout << "[IGoR] Starting Metropolis sampling..." << endl;
+
+    for (int step = 1; step <= num_samples; ++step) {
+        string proposal_state = mutate(current_state, mutation_region.first,
+                                       mutation_region.second, rng);
+
+        double proposal_prob =
+            compute_pgen(workdir, proposal_state, resources, false);
+
+        if (std::isnan(proposal_prob)) {
+            continue;
+        }
+
+        double acceptance_prob = std::min(1.0, proposal_prob / current_prob);
+        std::uniform_real_distribution<double> uniform_dist(0.0, 1.0);
+
+        if (uniform_dist(rng) < acceptance_prob) {
+            current_state = proposal_state;
+            current_prob = proposal_prob;
+            num_accepted++;
+            int dist = hamming_distance(sequence, proposal_state);
+            metadata_buffer.push_back(
+                {current_state, dist, current_prob, step});
+        }
+
+        if (metadata_buffer.size() >= buffer_size) {
+            for (const auto& meta : metadata_buffer) {
+                outfile << meta.to_string() << "\n";
+            }
+            metadata_buffer.clear();
+        }
+
+        if (step % 100 == 0 || step == num_samples) {
+            double acceptance_ratio =
+                (step > 0) ? static_cast<double>(num_accepted) / step : 0.0;
+            cout << "[IGoR] Step " << step << "/" << num_samples
+                 << " | Acceptance ratio: " << acceptance_ratio
+                 << " | Current Pgen: " << current_prob << endl;
+        }
+    }
+
+    // Write any remaining data in the buffer
+    for (const auto& meta : metadata_buffer) {
+        outfile << meta.to_string() << "\n";
+    }
+
+    cout << "[IGoR] Metropolis sampling finished." << endl;
+}
+
 int main(int argc, char* argv[]) {
-    string working_dir =
-        "/Users/alexanderbonnet/code/statbiophys-technical-test/data/1";
+    string workdir =
+        "/Users/alexanderbonnet/code/statbiophys-technical-test/data";
     if (argc > 1) {
-        working_dir = argv[1];
+        workdir = argv[1];
     }
 
     string sequence =
         "GACGCTGGAGTCACCCAAAGTCCCACACACCTGATCAAAACGAGAGGACAGCAAGTGACTCTGAGATGCT"
         "CTCCTAAGTCTGGGCATGACACTGTGTCCTGGTACCAACAGGCCCTGGGTCAGGGGCCCCAGTTTATCTT"
         "TCAGTATTATGAGGAGGAAGAGAGACAGAGAGGCAACTTCCCTGATCGATTCTCAGGTCACCAGTTCCCT"
-        "AACTATAGCTCTGAGCTGAATGTGAACGCCTTGTTGCTGGGGGACTCGGCCCTCTATCTCTGTGCCAGCA"
-        "GCTTGGGCTCAGGGAATGTTTCAGGGAAACACCATTTATTATGGAGAGGGAAGTTGGCTCACTGTTGTA"
+        "AACTATAGCTCTGAGCTGAATGTGAACGCCTTGTTGCTGGGGGACTCGGCCCTCTATCTCTGAAATCGCA"
+        "GCTTGGAAGGCGGGAAGGAGTGGGGGAAACACCGTGTACTATGGAGAGGGAAGTTGGCTCACTGTTGTA"
         "G";
 
-    // run_alignment_old(working_dir, sequence);
-    // cout << "oasihfoalfhal";
+    // Resources resources = load_resources();
+    // double result = compute_pgen(workdir, sequence, resources, true);
 
-    double pgen = compute_pgen(working_dir, sequence, false);
-    cout << pgen;
-    // run_alignment(working_dir, sequence);
+    // cout << result;
+
+    int num_samples = 10000;
+    int seed = 42;
+    std::pair<int, int> mutation_region = {270, -30};
+    int buffer_size = 100;
+    bool overwrite = true;
+
+    metropolis(workdir, sequence, num_samples, seed, mutation_region,
+               buffer_size, overwrite);
 
     return EXIT_SUCCESS;
 }
