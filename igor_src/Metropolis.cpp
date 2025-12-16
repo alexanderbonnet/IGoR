@@ -88,6 +88,63 @@ double SUBST_MATRIX_VALUES[] = {
     1,   1,   1,   -14, -13, 1,   1,   -13, 1,   -13, -12, -12, -12, 0.5, 0,
     0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0};
 
+// A RAII-based class to suppress stdout/stderr and cout/clog.
+struct SilentMode {
+    SilentMode() {
+        // Flush existing streams
+        cout.flush();
+        clog.flush();
+        cerr.flush();
+        fflush(stdout);
+        fflush(stderr);
+
+        // Save original file descriptors and stream buffers
+        cout_buf = std::cout.rdbuf();
+        clog_buf = std::clog.rdbuf();
+        stdout_fd = dup(STDOUT_FILENO);
+        stderr_fd = dup(STDERR_FILENO);
+
+        // Redirect C++ streams
+        dev_null_stream.open("/dev/null");
+        std::cout.rdbuf(dev_null_stream.rdbuf());
+        std::clog.rdbuf(dev_null_stream.rdbuf());
+
+        // Redirect C file descriptors
+        dev_null_fd = open("/dev/null", O_WRONLY);
+        dup2(dev_null_fd, STDOUT_FILENO);
+        dup2(dev_null_fd, STDERR_FILENO);
+    }
+
+    ~SilentMode() {
+        // Flush before restoring
+        cout.flush();
+        clog.flush();
+        fflush(stdout);
+        fflush(stderr);
+
+        // Restore C++ streams
+        std::cout.rdbuf(cout_buf);
+        std::clog.rdbuf(clog_buf);
+        dev_null_stream.close();
+
+        // Restore C file descriptors
+        dup2(stdout_fd, STDOUT_FILENO);
+        dup2(stderr_fd, STDERR_FILENO);
+
+        // Close saved file descriptors
+        close(stdout_fd);
+        close(stderr_fd);
+        close(dev_null_fd);
+    }
+
+   private:
+    std::streambuf* cout_buf;
+    std::streambuf* clog_buf;
+    int stdout_fd;
+    int stderr_fd;
+    int dev_null_fd;
+    std::ofstream dev_null_stream;
+};
 struct Resources {
     vector<pair<string, string>> v_genomic;
     vector<pair<string, string>> d_genomic;
@@ -98,7 +155,12 @@ struct Resources {
 };
 
 // load resources only once instead of every time we need to coompute pgen
-Resources load_resources() {
+Resources load_resources(bool verbose) {
+    unique_ptr<SilentMode> silent_mode;
+    if (!verbose) {
+        silent_mode = make_unique<SilentMode>();
+    }
+
     vector<pair<string, string>> v_genomic;
     vector<pair<string, string>> d_genomic;
     vector<pair<string, string>> j_genomic;
@@ -176,6 +238,11 @@ Resources load_resources() {
 
 double compute_pgen(const string& workdir, const string& sequence,
                     Resources resources, bool verbose) {
+    unique_ptr<SilentMode> silent_mode;
+    if (!verbose) {
+        silent_mode = make_unique<SilentMode>();
+    }
+
     // Set working directory
     string cl_path = workdir.empty() ? "/tmp/" : workdir;
     if (cl_path.back() != '/') {
@@ -419,7 +486,7 @@ void metropolis(const string& workdir, const string& sequence, int num_samples,
     string mkdir_command = "mkdir -p " + workdir;
     system(mkdir_command.c_str());
 
-    Resources resources = load_resources();
+    Resources resources = load_resources(false);
 
     // Initial step
     double current_prob = compute_pgen(workdir, sequence, resources, false);
@@ -506,10 +573,10 @@ int main(int argc, char* argv[]) {
 
     // cout << result;
 
-    int num_samples = 10000;
+    int num_samples = 200;
     int seed = 42;
     std::pair<int, int> mutation_region = {270, -30};
-    int buffer_size = 100;
+    int buffer_size = 5;
     bool overwrite = true;
 
     metropolis(workdir, sequence, num_samples, seed, mutation_region,
