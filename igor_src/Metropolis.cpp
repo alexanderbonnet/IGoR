@@ -88,7 +88,7 @@ double SUBST_MATRIX_VALUES[] = {
     1,   1,   1,   -14, -13, 1,   1,   -13, 1,   -13, -12, -12, -12, 0.5, 0,
     0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0};
 
-// A RAII-based class to suppress stdout/stderr and cout/clog.
+// Class to suppress stdout/stderr and cout/clog.
 struct SilentMode {
     SilentMode() {
         // Flush existing streams
@@ -145,6 +145,8 @@ struct SilentMode {
     int dev_null_fd;
     std::ofstream dev_null_stream;
 };
+
+// Struct to store pre-loaded data used for alignment and the computing of pgen.
 struct Resources {
     vector<pair<string, string>> v_genomic;
     vector<pair<string, string>> d_genomic;
@@ -154,7 +156,7 @@ struct Resources {
     Matrix<double> subst_matrix;
 };
 
-// load resources only once instead of every time we need to coompute pgen
+// Load resources only once instead of every time we need to coompute pgen.
 Resources load_resources(bool verbose) {
     unique_ptr<SilentMode> silent_mode;
     if (!verbose) {
@@ -553,12 +555,7 @@ void metropolis(const string& workdir, const string& sequence, int num_samples,
 }
 
 int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        cerr << "Usage: " << argv[0] << " <workdir> <sequence>" << endl;
-        return EXIT_FAILURE;
-    }
-
-    string workdir = argv[1];
+    string workdir = "set-your-own-workdir";
     string sequence =
         "GACGCTGGAGTCACCCAAAGTCCCACACACCTGATCAAAACGAGAGGACAGCAAGTGACTCTGAGATGCT"
         "CTCCTAAGTCTGGGCATGACACTGTGTCCTGGTACCAACAGGCCCTGGGTCAGGGGCCCCAGTTTATCTT"
@@ -566,11 +563,6 @@ int main(int argc, char* argv[]) {
         "AACTATAGCTCTGAGCTGAATGTGAACGCCTTGTTGCTGGGGGACTCGGCCCTCTATCTCTGTGCCAGCA"
         "GCTTGGGCTCAGGGTATGTTTCAGGGAAACACCATATATTTTGGAGAGGGAAGTTGGCTCACTGTTGTA"
         "G";
-
-    // Resources resources = load_resources();
-    // double result = compute_pgen(workdir, sequence, resources, true);
-
-    // cout << result;
 
     int num_samples = 10000;
     int seed = 1235;
